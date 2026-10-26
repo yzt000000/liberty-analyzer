@@ -2,7 +2,7 @@
 
 一个纯前端网页应用：解析标准单元库 / IO / 存储器 **Liberty (.lib)** 文件，
 提取**库级通用属性**、**每个 cell 的完整信息**，并把**查找表（LUT）图表化**
-（二维热力图 / 三维曲面 / 原始数据矩阵 / CSV 导出）。
+（二维热力图 / 三维曲面 / 原始数据矩阵 / CSV 导出），同时支持**多库多 cell 对比**。
 
 ## 快速开始
 
@@ -27,7 +27,9 @@ npx serve .                # 或 php -S localhost:8080 等
   - Nangate45 — 45nm，135 cells（经典 OpenROAD 教学库）
   - ASAP7 SIMPLE/RVT/TT — 7nm FinFET 预测 PDK，56 cells
   - SkyWater sky130_fd_sc_hd (TT 1.8V/25C) — 130nm 开源 PDK，428 cells
-- **下载开源库**：模态框内置目录，支持在线抓取（自动尝试 raw → ghproxy 镜像 → GitHub API，含 FakeRAM45 存储器宏与 sky130 IO）
+- **下载开源库**：模态框内置 21 个库条目，按工艺/节点分组，支持在线抓取
+  （自动尝试 raw → ghproxy 镜像 → GitHub API）。涵盖多 corner / 多 VT PDK，
+  可直接用于对比分析（见下方「单元对比」）。`.lib.gz` 压缩格式自动解压。
 - **上传本地 .lib**：支持多选
 - **自定义 URL**：输入任意允许 CORS 的 .lib 地址直接抓取解析
 
@@ -65,28 +67,56 @@ npx serve .                # 或 php -S localhost:8080 等
 - **原始数据矩阵**：完整数值表，min 绿 / max 红高亮
 - **CSV 导出**：当前 LUT 矩阵 / 整个库的 cell 列表
 
+### 5. 单元对比（「对比」标签页）
+支持**库内对比**与**跨库对比**（多 corner / 多 VT 库），最多 8 项：
+
+- **加入对比**：在「单元详情」头部点击「加入对比」按钮，或在对比面板手动选库 + cell 添加
+- **属性对比表**：面积、漏电、引脚数、时序弧数、drive_strength、PVT 等横向对比，
+  相同值绿色高亮、差异红色高亮
+- **引脚对比表**：合并所有 cell 的引脚，逐列显示方向 / 功能 / 电容，缺失标灰
+- **时序弧对比表**：按 `pin ← related_pin` 对齐，显示 timing_type / timing_sense / 表数量
+- **LUT 曲线叠加**：选定 pin / related_pin / 查找表后，在指定负载电容处对二维 LUT
+  做线性插值切片，把多个 cell 的 `transition → value` 曲线叠加绘制（每项一色），
+  直观对比不同 corner / VT 的延迟差异
+
+### 6. 可下载的开源库目录（21 个，按工艺分组）
+
+| 分组 | 库 | 说明 |
+|------|----|------|
+| **Nangate45 (45nm)** | NangateOpenCellLibrary typical | 135 cells，经典教学库（本地内置） |
+| **ASAP7 (7nm FinFET)** | SIMPLE/RVT/TT | 56 cells，预测性 7nm PDK（本地内置） |
+| **SkyWater 130nm** | sky130_fd_sc_hd TT 025C 1v80 | 428 cells，高密度（本地内置） |
+| | sky130_fd_sc_hs TT 100C 1v80 | 高速库，35 MB，可与 hd 对比速度等级与温度 |
+| | sky130 dummy_io | IO 占位单元库，inout 方向示例 |
+| **IHP 130nm (sg13g2)** | stdcell typ / fast / slow | 3 个 PVT corner，1.6 MB，可对比 PVT |
+| | IO typ | IO 单元，190 KB |
+| **GF 2nm 教学库 (gt2n)** | ELVT / LVT / SVT / HVT / ULVT | 5 种阈值电压，1.1 MB，**多 VT 直接对比** |
+| **GF 180nm (gf180mcu)** | 7t5v0 TT / SS / FF | 3 个 PVT corner，3 MB gz 压缩 |
+| **存储器宏 (fakeram45)** | 512x64 / 1024x32 / 128x64 / 256x64 / 64x64 | memory 组结构，blackbox 时序 |
+
+> 同组内的多 corner / 多 VT 库加载后，可在「对比」标签页直接对比属性与 LUT 曲线。
+
 ## 目录结构
 
 ```
 liberty-analyzer/
+├── .gitignore
 ├── index.html                  # 应用入口（单页）
 ├── serve.py                    # Python 一键启动脚本
-├── css/style.css               # 样式（浅色专业主题）
-├── js/liberty-parser.js        # Liberty 解析器 + 分析模型（浏览器/Node/Worker 三端）
-├── js/liberty-worker-src.js    # Worker 逻辑源码（Blob 自包含 Worker 用）
-├── js/app.js                   # 应用逻辑与渲染
-├── vendor/echarts.min.js       # ECharts 5.5（本地化，离线可用）
-├── vendor/echarts-gl.min.js    # 3D 曲面扩展（按需懒加载，不拖慢首屏）
+├── README.md
+├── css/
+│   └── style.css               # 样式（浅色专业主题）
+├── js/
+│   ├── liberty-parser.js       # Liberty 解析器 + 分析模型（浏览器/Node/Worker 三端）
+│   ├── liberty-worker-src.js   # Worker 逻辑源码（Blob 自包含 Worker 用）
+│   └── app.js                  # 应用逻辑与渲染
 ├── libs/                       # 内置开源 .lib 库（约 22 MB）
 │   ├── NangateOpenCellLibrary_typical.lib
 │   ├── asap7sc7p5t_SIMPLE_RVT_TT_nldm_211120.lib
 │   └── sky130_fd_sc_hd__tt_025C_1v80.lib
-├── test-parser.js              # 解析器 Node 测试（cell 数/LUT 数值抽检）
-├── test-worker.js              # Worker 逻辑测试（vm 模拟 worker 全局）
-├── test-browser.js             # 真实 Chrome 流程测试（puppeteer-core）
-├── test-browser2.js            # 真实 Chrome 深度诊断
-├── test-browser3.js            # 真实 Chrome 上传流程测试
-└── test-smoke.js               # jsdom 全链路冒烟测试（50 项断言）
+└── vendor/
+    ├── echarts.min.js          # ECharts 5.5（本地化，离线可用）
+    └── echarts-gl.min.js       # 3D 曲面扩展（按需懒加载，不拖慢首屏）
 ```
 
 ## 性能设计（大文件不卡界面）
@@ -97,34 +127,15 @@ liberty-analyzer/
   ① 部分托管平台网关会挂起 Worker 的 `importScripts` 子资源请求（不报错也不返回，
   导致解析永远等待）；② file:// 下 Chrome 对 Worker 的限制。
 - **20 秒超时保护**：Worker 无响应自动终止并回退主线程同步解析（toast 会说明），
-  任何环境下都不会“一直解析”。
+  任何环境下都不会"一直解析"。
 - **Tokenizer 平铺存储**：token 流存于 `Uint8Array/Int32Array` 类型化数组，
   避免百万级 token 对象分配（sky130 12.8MB ≈ 56 万 token）。
 - **echarts-gl 懒加载**：仅在点击「3D 曲面」且浏览器支持 WebGL 时才注入
   640KB 脚本，首屏与二维分析完全不受影响。
 - **多镜像下载链**：GitHub raw → ghproxy.net（国内镜像）→ GitHub API（base64），
   每级失败自动降级，错误信息精确到 HTTP 状态码与镜像来源。
-
-## 测试
-
-```bash
-# 解析器测试（对比源文件校验 cell 数与 LUT 数值）
-node test-parser.js
-
-# Worker 端到端测试（vm 模拟 worker 全局环境）
-node test-worker.js
-
-# 冒烟测试（需先安装 jsdom 到 node workspace）
-NODE_PATH=<node-workspace>/node_modules node test-smoke.js
-```
-
-实测数据（Node 22，本机）：
-
-| 库 | 大小 | cells | tokens | 解析耗时 |
-|---|---|---|---|---|
-| ASAP7 SIMPLE/RVT/TT | 2.3 MB | 56 | ~14 万 | 0.14 s |
-| Nangate45 | 6.7 MB | 135 | ~33 万 | 0.6 s |
-| sky130_fd_sc_hd TT | 12.8 MB | 428 | 56 万 | 0.8 s |
+- **gzip 自动解压**：`.lib.gz` 库通过浏览器原生 `DecompressionStream` 解压
+  （Chrome 80+ / Firefox 65+ / Safari 16.4+），不支持时给出明确提示。
 
 ## 解析器覆盖的 Liberty 语法
 
@@ -138,45 +149,13 @@ NODE_PATH=<node-workspace>/node_modules node test-smoke.js
 - `values` 的多字符串行列表形式（Nangate 风格）与单字符串换行形式
 - `define(...)` 属性声明；NLDM / CCS / ECSM 结构均按通用组解析
 
-## 部署 / 发布为网站
-
-纯静态站点，无构建步骤，可发布到任意静态托管平台：
-
-```bash
-# 方式一: WorkBuddy 内置发布（生成分享链接）
-#   在对话中要求发布即可，工具会自动处理
-
-# 方式二: 任意静态托管（GitHub Pages / Vercel / Netlify / OSS 等）
-#   把整个目录原样上传，入口为 index.html
-```
-
-**分享链接门禁兼容**：部分托管平台（如 WorkBuddy 应用托管）的分享链接要求
-**每个请求都携带 `?sharecode=...`**，否则子资源返回 403「链接不完整」。
-本应用通过 `<head>` 中的内联资源加载器把地址栏 query 自动传递给所有同源请求
-（CSS/JS/库文件/Worker/懒加载的 echarts-gl），本地或无 query 访问时行为不变。
-自建托管（无门禁）时 query 为空，同样正常工作。
-
-**资源加载策略（稳健性）**：加载器**并行**获取 5 个资源（CSS / echarts / 解析器 /
-Worker 逻辑 / 主程序），单个资源 12 秒超时并自动重试 2 次，全部到齐后**严格按依赖顺序**
-注入执行。加载期间显示「正在加载组件 n/5」遮罩，组件就绪前点击不会落到未绑定事件的
-按钮上；全部失败时给出明确错误提示与「重新加载」按钮。这样即使某个请求被网关迟滞，
-也不会出现应用永久停在未初始化状态的情况。
-
-> 早期版本采用串行加载（前一个 `onload` 才发起下一个），任一请求迟缓/静默挂起就会
-> 导致主程序永远不初始化，页面表现为「点击无反应」——已由并行加载 + 超时重试解决。
-
-**CDN 缓存与版本号**：托管平台的 CDN 边缘节点可能缓存旧版静态文件且各节点
-不一致（表现为不同用户看到不同版本）。所有资源 URL 都带有 `?v=<CACHE_VERSION>`
-版本号（在 `index.html` 内联加载器中定义，app.js 的 `shareQs()` 共用），
-**每次发布新内容时必须递增该版本号**（如 `20261024b` → `20261024c`），
-否则边缘节点会继续 serving 旧文件。
-
 ## 已知限制
 
 - CCS 非线性模型（ecsm 组）仅做通用解析与展示，不计算电流波形
 - 超大库（>30MB）会弹出耗时警告；极端情况下可能触发浏览器内存限制
 - 在线下载依赖目标站点可达性：国内网络会自动尝试 ghproxy / GitHub API 镜像，
   全部失败时请手动下载后用「上传 .lib」加载
+- `.lib.gz` 解压需浏览器支持 `DecompressionStream`，不支持时请手动解压后上传
 - file:// 直接打开时 Chrome 禁止 Worker 与 fetch 本地文件，将自动回退同步解析，
   但内置库加载不可用——请始终通过 HTTP 服务器启动
 
@@ -187,5 +166,8 @@ Worker 逻辑 / 主程序），单个资源 12 秒超时并自动重试 2 次，
 - Nangate45: Nangate Inc.（OpenROAD-flow-scripts 镜像分发）
 - ASAP7: Arizona State University / Lawrence T. Clark（BSD-3）
 - SkyWater 130nm: SkyWater Technology / Google（Apache-2.0）
+
+可下载的开源库均来自 [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)
+平台目录，包括 IHP 130nm (sg13g2)、GF 2nm 教学库 (gt2n)、GF 180nm (gf180mcu) 等。
 
 本工具仅做本地解析与可视化，不修改原始文件。
