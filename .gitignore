@@ -1,0 +1,11 @@
+# 工具配置目录（含本地配置，不应入库）
+.codeartsdoer/
+
+# 临时验证脚本
+_*.js
+_*.py
+_*.tmp
+
+# 系统文件
+Thumbs.db
+.DS_Store

@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liberty 库分析器 | .lib 单元库可视化分析工具</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%232563eb'/%3E%3Ctext x='12' y='17' font-size='13' font-family='monospace' font-weight='bold' text-anchor='middle' fill='white'%3EL%3C/text%3E%3C/svg%3E">
+<script>
+/* 资源加载器 (inline, 必须先于任何外链执行)
+   1. 把地址栏 query (托管平台分享链接的 ?sharecode=...) 传给所有同源请求 ——
+      相对路径子资源默认不带 query, 在带分享码门禁的平台会被 403 拦截。
+   2. 给所有资源加 ?v= 版本号 —— CDN 边缘节点可能缓存旧版且各节点不一致,
+      版本号变化强制回源站取新文件 (每次发布递增 window.CACHE_VERSION)。
+   3. 并行获取 + 单次超时重试 + 按依赖关系注入。
+      关键: app.js 只依赖解析器与 Worker 逻辑, 不等待体积最大的图表引擎 (echarts) ——
+      任一资源迟缓都不会阻塞主程序初始化 (早期版本因串行等待导致组件永远加载不完)。
+   本地/无 query 访问时行为与普通静态站一致。 */
+(function () {
+  var qs = window.location.search || '';
+  window.CACHE_VERSION = '20261024d';
+
+  var RES = [
+    { p: 'css/style.css', kind: 'css', label: '样式', deps: [] },
+    { p: 'js/liberty-parser.js', kind: 'js', label: '解析器', deps: [] },
+    { p: 'js/liberty-worker-src.js', kind: 'js', label: '后台线程', deps: [] },
+    { p: 'js/app.js', kind: 'js', label: '主程序', deps: ['js/liberty-parser.js', 'js/liberty-worker-src.js'] },
+    { p: 'vendor/echarts.min.js', kind: 'js', label: '图表引擎', deps: [] }
+  ];
+  var CORE = ['css/style.css', 'js/liberty-parser.js', 'js/liberty-worker-src.js', 'js/app.js'];
+  var TIMEOUT_MS = 12000;   // 单个资源超时
+  var RETRIES = 2;          // 超时/失败重试次数
+  var doneCount = 0, injected = {}, sources = {}, coreDone = false, hardFailed = false;
+
+  function assetUrl(p, bust) {
+    var parts = ['v=' + window.CACHE_VERSION];
+    if (bust) parts.push('_r=' + bust);
+    if (qs) parts.push(qs.slice(1));
+    return p + '?' + parts.join('&');
+  }
+
+  /* ---- 启动进度遮罩: 资源未就绪时不让点击落到未绑定事件的按钮上 ---- */
+  var box = document.createElement('div');
+  box.id = 'bootMask';
+  box.style.cssText = 'position:fixed;inset:0;z-index:99998;display:flex;align-items:center;' +
+    'justify-content:center;background:#f3f5f9;font-family:-apple-system,\"Segoe UI\",sans-serif';
+  box.innerHTML = '<div style="text-align:center;color:#475569">' +
+    '<div style="width:34px;height:34px;margin:0 auto 14px;border:3px solid #cbd5e1;' +
+    'border-top-color:#2563eb;border-radius:50%;animation:bootspin .9s linear infinite"></div>' +
+    '<div id="bootText" style="font-size:14px">正在加载组件 0/' + RES.length + '…</div>' +
+    '<div id="bootHint" style="font-size:12px;color:#94a3b8;margin-top:8px"></div></div>' +
+    '<style>@keyframes bootspin{to{transform:rotate(360deg)}}</style>';
+  function mountBoot() { document.body.appendChild(box); }
+  if (document.body) mountBoot();
+  else document.addEventListener('DOMContentLoaded', mountBoot);
+
+  function setBoot(i, hint) {
+    var t = document.getElementById('bootText');
+    var h = document.getElementById('bootHint');
+    if (t) t.textContent = '正在加载组件 ' + i + '/' + RES.length + '…';
+    if (h && hint) h.textContent = hint;
+  }
+  function hideBoot() {
+    if (box.parentNode) box.parentNode.removeChild(box);
+  }
+
+  function failPanel(resources, detail) {
+    if (box.parentNode) box.parentNode.removeChild(box);
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
+      'background:#f3f5f9;z-index:99999;font-family:-apple-system,\"Segoe UI\",sans-serif;text-align:center;padding:24px';
+    d.innerHTML = '<div style="max-width:540px;color:#475569">' +
+      '<h3 style="color:#dc2626;margin:0 0 12px">组件加载失败</h3>' +
+      '<p style="font-size:14px;line-height:1.8">无法获取：<code style="background:#e8edf5;padding:2px 6px;border-radius:4px">' +
+      resources.join('、') + '</code><br><span style="color:#64748b">' + detail + '</span></p>' +
+      '<p style="font-size:13px;color:#64748b;line-height:1.8">若通过分享链接访问，请确认地址栏包含完整的 ' +
+      '<code style="background:#e8edf5;padding:2px 6px;border-radius:4px">?sharecode=…</code> 参数；也可稍后重试。</p>' +
+      '<button onclick="location.reload()" style="margin-top:8px;padding:9px 20px;border:0;border-radius:8px;' +
+      'background:#2563eb;color:#fff;font-size:14px;cursor:pointer">重新加载</button></div>';
+    document.body.appendChild(d);
+  }
+
+  /* XHR 带超时获取文本 */
+  function getText(path, bust) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', assetUrl(path, bust), true);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+        else reject(new Error('HTTP ' + xhr.status));
+      };
+      xhr.onerror = function () { reject(new Error('网络错误')); };
+      xhr.ontimeout = function () { reject(new Error('超时')); };
+      try { xhr.send(); } catch (e) { reject(e); }
+    });
+  }
+
+  function loadResource(item) {
+    return new Promise(function (resolve) {
+      var attempt = 0;
+      function tryOnce() {
+        getText(item.p, attempt).then(function (src) {
+          resolve({ item: item, src: src, err: null });
+        }).catch(function (e) {
+          attempt++;
+          if (attempt <= RETRIES) {
+            setBoot(doneCount, item.label + ' 第 ' + attempt + ' 次重试…');
+            tryOnce();
+          } else {
+            resolve({ item: item, src: null, err: String(e.message || e) });
+          }
+        });
+      }
+      tryOnce();
+    }).then(function (r) {
+      doneCount++;
+      setBoot(doneCount);
+      return r;
+    });
+  }
+
+  // 并行获取全部资源; 任一到达即检查其依赖是否已注入, 满足则立即注入
+  RES.map(loadResource).forEach(function (pr) {
+    pr.then(function (r) {
+      if (!r.src) {
+        var isCore = CORE.indexOf(r.item.p) >= 0;
+        if (isCore) { hardFailed = true; noteFailure(r); }
+        else showChip('图表引擎加载失败，图表不可用（其余功能正常）', true);
+        return;
+      }
+      sources[r.item.p] = r.src;
+      pump();
+      if (r.item.p === 'vendor/echarts.min.js') {
+        hideChip();
+        try { window.dispatchEvent(new Event('echartsready')); } catch (e) { /* noop */ }
+      }
+    });
+  });
+
+  // 依赖驱动注入: 依赖已全部注入的资源立即执行 (不等待无关资源)
+  function pump() {
+    RES.forEach(function (item) {
+      if (injected[item.p] || !sources[item.p]) return;
+      var ok = item.deps.every(function (d) { return injected[d]; });
+      if (!ok) return;
+      if (item.kind === 'css') {
+        var st = document.createElement('style');
+        st.textContent = sources[item.p];
+        document.head.appendChild(st);
+      } else {
+        var sc = document.createElement('script');
+        sc.textContent = sources[item.p];
+        document.head.appendChild(sc);
+      }
+      injected[item.p] = true;
+      // 主程序就绪即可收起启动遮罩 (不等图表引擎)
+      if (!coreDone && CORE.every(function (p) { return injected[p]; })) {
+        coreDone = true;
+        hideBoot();
+        if (!sources['vendor/echarts.min.js']) showChip('图表引擎加载中，稍候即可查看图表…', false);
+      }
+    });
+  }
+
+  function noteFailure(r) {
+    var el = document.getElementById('bootText');
+    if (el) el.textContent = '组件加载失败：' + r.item.p;
+    failPanel([r.item.p], String(r.err || '未知错误'));
+  }
+
+  /* 图表引擎延迟到达时的非阻塞提示条 */
+  function showChip(msg, isError) {
+    hideChip();
+    var c = document.createElement('div');
+    c.id = 'bootChip';
+    c.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99997;padding:8px 14px;border-radius:8px;' +
+      'font-family:-apple-system,"Segoe UI",sans-serif;font-size:12px;box-shadow:0 2px 10px rgba(15,23,42,.12);' +
+      (isError ? 'background:#fef2f2;color:#b91c1c;border:1px solid #fecaca' : 'background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe');
+    c.textContent = msg;
+    document.body.appendChild(c);
+  }
+  function hideChip() {
+    var c = document.getElementById('bootChip');
+    if (c && c.parentNode) c.parentNode.removeChild(c);
+  }
+
+  // 兜底: 极端情况下某请求既不成功也不超时 (网关静默挂起) 时给出提示
+  setTimeout(function () {
+    if (!coreDone && !hardFailed) {
+      failPanel(['（核心组件加载超时）'], '等待超过 ' + Math.round(TIMEOUT_MS * (RETRIES + 1) / 1000) +
+        ' 秒仍未完成。可能是网络受限或托管网关未放行，请重试。');
+    }
+  }, TIMEOUT_MS * (RETRIES + 1) + 3000);
+})();
+</script>
+</head>
+<body>
+
+<!-- ============ 顶栏 ============ -->
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+        <path d="M7 7h4v4H7zM13 13h4v4h-4zM13 7l4 4M7 13l4 4"></path>
+      </svg>
+      <div class="logo-text">
+        <span class="logo-title">Liberty 库分析器</span>
+        <span class="logo-sub">.lib 单元库 · 属性解析 · LUT 图表化</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="topbar-center">
+    <div class="lib-select-wrap">
+      <span class="lib-select-label">当前库</span>
+      <select id="libSelector" class="lib-select" disabled>
+        <option value="">— 请先加载库 —</option>
+      </select>
+      <span id="libMeta" class="lib-meta"></span>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <button id="btnSaveLib" class="btn btn-ghost" title="把当前库的原始文本保存为 .lib 文件（下载的库只在内存中，可用此按钮落盘）">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+      保存 .lib
+    </button>
+    <button id="btnDownload" class="btn btn-ghost" title="从网络下载开源 Liberty 库">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>
+      下载开源库
+    </button>
+    <button id="btnUpload" class="btn btn-ghost" title="上传本地 .lib 文件">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20V8m0 0l-4 4m4-4l4 4M4 4h16"/></svg>
+      上传 .lib
+    </button>
+    <input type="file" id="fileInput" accept=".lib,.lib.gz,.txt" multiple style="display:none">
+  </div>
+</header>
+
+<!-- ============ 主体三栏 ============ -->
+<div class="layout">
+
+  <!-- ---- 左侧: 单元列表 ---- -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="sidebar-title">
+        <span>单元库 Cell Library</span>
+        <span class="cell-count-badge" id="cellCountBadge">0</span>
+      </div>
+      <div class="cell-filters">
+        <input id="cellSearch" class="input" type="text" placeholder="搜索 cell 名称…" disabled>
+        <div class="filter-row">
+          <select id="cellTypeFilter" class="input input-sm" disabled>
+            <option value="all">全部类型</option>
+            <option value="comb">组合逻辑</option>
+            <option value="seq">时序单元</option>
+          </select>
+          <select id="cellSort" class="input input-sm" disabled>
+            <option value="name">按名称</option>
+            <option value="area">按面积</option>
+            <option value="leak">按漏电</option>
+            <option value="pins">按 pin 数</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="cell-list" id="cellList">
+      <div class="empty-hint">
+        <div class="empty-icon">📚</div>
+        <p>尚未加载库</p>
+        <p class="empty-sub">点击右上角 <b>下载开源库</b> 获取内置库<br>或 <b>上传 .lib</b> 解析本地文件</p>
+      </div>
+    </div>
+    <div class="cell-pager" id="cellPager" style="display:none">
+      <button class="btn btn-sm" id="btnPrevPage">上一页</button>
+      <span id="pageInfo"></span>
+      <button class="btn btn-sm" id="btnNextPage">下一页</button>
+    </div>
+  </aside>
+
+  <!-- ---- 中间: 主面板 ---- -->
+  <main class="main">
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="overview">库概览</button>
+      <button class="tab" data-tab="cell">单元详情</button>
+      <button class="tab" data-tab="lut">LUT 图表</button>
+      <button class="tab" data-tab="compare">对比</button>
+    </div>
+
+    <div class="tab-panels">
+      <!-- 库概览 -->
+      <section class="tab-panel active" id="panel-overview">
+        <div class="welcome" id="welcomePanel">
+          <h2>Liberty 库分析器</h2>
+          <p>解析标准单元库 / IO 库 / 存储器的 <code>.lib</code> 文件，提取库级属性、单元属性、引脚与时序弧信息，并将查找表（LUT）以热力图 / 3D 曲面 / 数据表形式可视化。</p>
+          <div class="welcome-grid">
+            <div class="welcome-card">
+              <div class="welcome-num">1</div>
+              <h3>加载库</h3>
+              <p>下载内置开源库（Nangate45 / ASAP7 / SkyWater 130nm），或上传本地 .lib 文件，或输入 URL 直接抓取。</p>
+            </div>
+            <div class="welcome-card">
+              <div class="welcome-num">2</div>
+              <h3>分析属性</h3>
+              <p>库级单位 / 工作条件 / LUT 模板；每个 cell 的面积、漏电、引脚、功能表达式、时序弧、状态表。</p>
+            </div>
+            <div class="welcome-card">
+              <div class="welcome-num">3</div>
+              <h3>图表化 LUT</h3>
+              <p>delay / transition / power 查找表渲染为热力图、3D 曲面与原始数据矩阵，支持 CSV 导出。</p>
+            </div>
+          </div>
+        </div>
+        <div id="overviewContent"></div>
+      </section>
+
+      <!-- 单元详情 -->
+      <section class="tab-panel" id="panel-cell">
+        <div class="empty-hint tall" id="cellEmptyHint">
+          <div class="empty-icon">🔲</div>
+          <p>从左侧单元列表选择一个 cell 查看详情</p>
+        </div>
+        <div id="cellDetailContent"></div>
+      </section>
+
+      <!-- LUT 图表 -->
+      <section class="tab-panel" id="panel-lut">
+        <div class="lut-toolbar" id="lutToolbar">
+          <div class="lut-selects">
+            <label>Cell <select id="lutCell" class="input input-sm"></select></label>
+            <label>Pin <select id="lutPin" class="input input-sm"></select></label>
+            <label>时序弧 <select id="lutArc" class="input input-sm"></select></label>
+            <label>查找表 <select id="lutTable" class="input input-sm"></select></label>
+          </div>
+          <div class="lut-actions">
+            <button class="btn btn-sm" id="btnLutHeatmap" title="二维热力图">热力图</button>
+            <button class="btn btn-sm" id="btnLutSurface" title="三维曲面">3D 曲面</button>
+            <button class="btn btn-sm" id="btnLutCsv" title="导出当前查找表 CSV">导出 CSV</button>
+          </div>
+        </div>
+        <div class="lut-body">
+          <div class="empty-hint tall" id="lutEmptyHint">
+            <div class="empty-icon">📈</div>
+            <p>选择 cell / pin / 时序弧后，此处展示查找表图表</p>
+            <p class="empty-sub">也可在「单元详情」中点击任意查找表的「查看图表」按钮直达</p>
+          </div>
+          <div id="lutChartWrap" class="lut-chart-wrap" style="display:none">
+            <div class="lut-chart-head" id="lutChartHead"></div>
+            <div class="chart-holder" id="chartHolder"></div>
+            <div class="lut-matrix-wrap" id="lutMatrixWrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 对比 -->
+      <section class="tab-panel" id="panel-compare">
+        <div class="cmp-empty" id="cmpEmptyHint">
+          <div class="empty-icon">⚖️</div>
+          <h3>单元对比</h3>
+          <p>将多个 cell（同一库或不同库）加入对比，查看属性差异与 LUT 曲线叠加。</p>
+          <p class="empty-sub">在「单元详情」中点击 <b>加入对比</b> 按钮，或下方手动添加。</p>
+        </div>
+        <div id="compareContent" style="display:none">
+          <div class="cmp-toolbar">
+            <div class="cmp-add-row">
+              <label>库 <select id="cmpLib" class="input input-sm"></select></label>
+              <label>Cell <select id="cmpCell" class="input input-sm"></select></label>
+              <button class="btn btn-primary btn-sm" id="btnCmpAdd">加入对比</button>
+              <button class="btn btn-sm" id="btnCmpClear" title="清空对比列表">清空</button>
+              <span class="cmp-count" id="cmpCount"></span>
+            </div>
+            <div class="cmp-chips" id="cmpChips"></div>
+          </div>
+
+          <div class="cmp-section">
+            <div class="cmp-section-title">基本属性对比</div>
+            <div class="table-wrap" id="cmpAttrWrap"></div>
+          </div>
+
+          <div class="cmp-section">
+            <div class="cmp-section-title">引脚对比</div>
+            <div class="table-wrap" id="cmpPinWrap"></div>
+          </div>
+
+          <div class="cmp-section">
+            <div class="cmp-section-title">时序弧对比</div>
+            <div class="table-wrap" id="cmpArcWrap"></div>
+          </div>
+
+          <div class="cmp-section">
+            <div class="cmp-section-title">LUT 曲线叠加对比</div>
+            <div class="cmp-lut-ctrl">
+              <label>Pin <select id="cmpLutPin" class="input input-sm"></select></label>
+              <label>related_pin <select id="cmpLutRel" class="input input-sm"></select></label>
+              <label>查找表 <select id="cmpLutTable" class="input input-sm"></select></label>
+              <label>采样负载 <input id="cmpLutLoad" class="input input-sm" type="number" value="0.05" step="0.01" style="width:80px"></label>
+              <span class="muted" id="cmpLutNote"></span>
+            </div>
+            <div class="cmp-chart-wrap">
+              <div class="chart-holder" id="cmpChartHolder" style="height:420px"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- ============ 模态框: 下载开源库 ============ -->
+<div class="modal-mask" id="downloadModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>下载开源 Liberty 库</h3>
+      <button class="modal-close" id="btnCloseModal">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-desc">以下库文件托管于 GitHub（OpenROAD-flow-scripts），按工艺/节点分组。下载时按 <b>原始地址 → ghproxy 镜像 → GitHub API</b> 顺序自动重试（国内网络通常走镜像成功）。标注 <b>gz</b> 的库为 .lib.gz 压缩格式，下载后自动解压（需 Chrome 80+ / Firefox 65+ / Safari 16.4+）。同组内的多 corner / 多 VT 库可用「对比」标签页直接对比：</p>
+      <div class="catalog" id="catalogList"></div>
+      <div class="url-form">
+        <h4>自定义 URL</h4>
+        <div class="url-row">
+          <input id="customUrl" class="input" type="text" placeholder="https://…/xxx.lib（需允许 CORS，如 raw.githubusercontent.com）">
+          <input id="customName" class="input input-sm" type="text" placeholder="库名称（可选）" style="max-width:180px">
+          <button class="btn btn-primary" id="btnFetchUrl">抓取并解析</button>
+        </div>
+        <p class="modal-note">提示：GitHub raw 地址（raw.githubusercontent.com）支持跨域且会自动尝试镜像；其它站点若不允许跨域将无法抓取，请先下载到本地再用「上传 .lib」加载。大文件解析在后台线程进行，页面不会卡顿，可随时取消。</p>
+      </div>
+      <div class="url-form">
+        <h4>下载的库保存在哪里？</h4>
+        <p class="modal-note" style="margin-top:0">下载/上传的库<b>只保存在当前网页的内存中</b>（刷新页面即失效），不会写入磁盘——浏览器网页没有写本地文件的权限。应用的 <b>libs/ 文件夹</b>只包含内置的 3 个开源库。如需落盘：加载后点右上角<b>「保存 .lib」</b>按钮，浏览器会把它存到默认下载目录。</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span id="downloadStatus" class="download-status"></span>
+    </div>
+  </div>
+</div>
+
+<!-- 全局加载遮罩 -->
+<div class="loading-mask" id="loadingMask" style="display:none">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loadingText">正在解析…</div>
+    <button class="btn btn-sm" id="btnCancelLoad" style="display:none;margin-top:4px">取消</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" style="display:none"></div>
+
+<!-- 全部资源由 <head> 中的内联加载器按序注入 (自动携带地址栏 query, 兼容分享链接门禁) -->
+</body>
+</html>
