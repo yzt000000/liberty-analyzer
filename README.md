@@ -96,20 +96,55 @@ npx serve .                # 或 php -S localhost:8080 等
 
 > 同组内的多 corner / 多 VT 库加载后，可在「对比」标签页直接对比属性与 LUT 曲线。
 
+### 7. Liberty 文件生成器（`generator.html`）
+
+除解析现有 .lib 外，本工具另提供**正向生成器**：根据结构化表单输入产生合规的 Liberty (.lib) 文件，
+生成结果可一键送回分析器解析验证（自洽性）。从 `index.html` 顶栏「生成器」入口进入，或直接访问
+`generator.html`。
+
+**生成内容范围**：
+- 库头属性（library / technology / delay_model / nom_* / 单位 / voltage_map / define 等）
+- `lu_table_template` / `operating_conditions` 声明
+- 组合单元与时序单元（FF / LATCH / statetable / clock / setup / hold 约束）
+- NLDM 时序 LUT（cell_rise / cell_fall / rise_transition / fall_transition）
+- `internal_power` / `leakage_power`（含 when 条件）/ CCS 模型
+
+**LUT 数值三种来源**（每个表独立选择）：
+- **布尔函数估算**：根据 pin 的 function 表达式（`!A`、`A&B` 等）+ 驱动强度，用线性延迟模型生成默认 5×5 表
+- **直接粘贴**：在文本框粘贴 index_1 / index_2 / values 数值
+- **参考库采样**：加载参考 .lib，按缩放系数（delay_scale / cap_scale / power_scale）从参考 cell 的 LUT 线性变换生成
+
+**从参考库导入 cell 改写**：
+加载参考 .lib 后，点「从参考库导入 cell」→ 在弹出的搜索面板选取任意 cell → 该 cell 的完整结构
+（pins / timing / LUT / ff / leakage）被转换为可编辑表单 cell，可在表单中任意改写后生成。
+已验证 Nangate 135 cells、sky130 428 cells 全部可导入。
+
+**配置文件导入/导出**：
+- 「导出配置」：把当前表单状态保存为 `<libName>.gen.json`，下次可恢复继续编辑
+- 「导入配置」：上传 .gen.json 恢复表单
+
+**输出**：
+- 页面预览（语法高亮）
+- 下载 `<libName>.lib`
+- 「送回解析验证」：经 sessionStorage 暂存后跳转 index.html，analyzer 自动加载并解析（自洽性校验）
+
 ## 目录结构
 
 ```
 liberty-analyzer/
 ├── .gitignore
-├── index.html                  # 应用入口（单页）
+├── index.html                  # 分析器入口（单页）
+├── generator.html              # 生成器入口（独立页）
 ├── serve.py                    # Python 一键启动脚本
 ├── README.md
 ├── css/
-│   └── style.css               # 样式（浅色专业主题）
+│   ├── style.css               # 分析器样式（浅色专业主题）
+│   └── liberty-gen.css         # 生成器专属样式
 ├── js/
 │   ├── liberty-parser.js       # Liberty 解析器 + 分析模型（浏览器/Node/Worker 三端）
 │   ├── liberty-worker-src.js   # Worker 逻辑源码（Blob 自包含 Worker 用）
-│   └── app.js                  # 应用逻辑与渲染
+│   ├── app.js                  # 分析器应用逻辑与渲染
+│   └── liberty-gen.js          # 生成器全部逻辑（10 个模块，挂 window.LibGen）
 ├── libs/                       # 内置开源 .lib 库（约 22 MB）
 │   ├── NangateOpenCellLibrary_typical.lib
 │   ├── asap7sc7p5t_SIMPLE_RVT_TT_nldm_211120.lib

@@ -1,0 +1,102 @@
+/* ============================================================
+   Liberty 文件生成器 — 专属样式
+   复用 style.css 的 CSS 变量 (--accent/--panel/--border 等)
+   ============================================================ */
+.gen-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.gen-topbar {
+  height: 54px; flex-shrink: 0; display: flex; align-items: center; gap: 16px;
+  padding: 0 16px; background: linear-gradient(180deg,#fff 0%,#fbfcfe 100%);
+  border-bottom: 1px solid var(--border);
+}
+.gen-topbar a { color: var(--accent); text-decoration: none; font-size: 13px; }
+.gen-topbar h1 { font-size: 15px; font-weight: 600; color: var(--text); margin: 0; }
+.gen-topbar .spacer { flex: 1; }
+
+.gen-main { flex: 1; display: flex; min-height: 0; }
+.gen-form-wrap {
+  flex: 1 1 50%; overflow-y: auto; padding: 12px 14px; border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+.gen-preview-wrap {
+  flex: 1 1 50%; overflow-y: auto; padding: 12px 14px; background: var(--panel-2);
+  display: flex; flex-direction: column;
+}
+.gen-preview-pre {
+  flex: 1; margin: 0; padding: 10px; background: #0f172a; color: #e2e8f0;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow: auto;
+  border-radius: 6px; white-space: pre;
+}
+.gen-preview-code { display: block; }
+.gen-preview-empty { color: var(--muted); text-align: center; padding: 40px 0; }
+
+@media (max-width: 900px) {
+  .gen-main { flex-direction: column; }
+  .gen-form-wrap, .gen-preview-wrap { flex: 1 1 auto; border-right: 0; border-bottom: 1px solid var(--border); }
+}
+
+/* 表单结构 */
+.gen-form-inner { display: flex; flex-direction: column; gap: 8px; }
+.gen-section {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.gen-section-head {
+  padding: 8px 12px; background: var(--panel-2); font-weight: 600; font-size: 13px;
+  color: var(--text); cursor: pointer; border-bottom: 1px solid var(--border); user-select: none;
+}
+.gen-section-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.gen-field { display: flex; align-items: center; gap: 8px; }
+.gen-label { width: 150px; flex-shrink: 0; font-size: 12px; color: var(--text-2); }
+.gen-input, .gen-select, .gen-textarea {
+  flex: 1; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 5px;
+  font-size: 12.5px; font-family: inherit; background: #fff; color: var(--text); min-width: 0;
+}
+.gen-textarea { font-family: var(--mono); resize: vertical; }
+.gen-input.error, .gen-select.error, .gen-textarea.error { border-color: var(--red); background: var(--red-soft); }
+.gen-subsection { margin-top: 6px; padding: 8px; background: var(--panel-2); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
+.gen-subhead { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+.gen-vm-row, .gen-tpl-row, .gen-opcond-row, .gen-seq-row, .gen-lk-row {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.gen-vm-row .gen-input, .gen-tpl-row .gen-input { flex: 0 1 auto; }
+.gen-tpl-idx { font-size: 11px; color: var(--muted); width: 28px; }
+
+/* cell / pin / timing 卡片 */
+.gen-cell-card, .gen-pin-card, .gen-timing-card {
+  border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff;
+}
+.gen-cell-head, .gen-pin-head, .gen-timing-head {
+  padding: 6px 10px; background: var(--accent-soft); font-weight: 600; font-size: 12.5px;
+  color: var(--accent); border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; align-items: center;
+}
+.gen-pin-head { background: var(--green-soft); color: var(--green); }
+.gen-timing-head { background: var(--purple-soft); color: var(--purple); }
+.gen-cell-body, .gen-pin-body, .gen-timing-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.gen-pins-list, .gen-timing-list, .gen-lk-list, .gen-vm-list { display: flex; flex-direction: column; gap: 4px; }
+
+/* LUT 来源 */
+.gen-lut-section { border: 1px dashed var(--border-strong); border-radius: 5px; margin-top: 4px; padding: 6px; }
+.gen-lut-head { font-size: 12px; font-weight: 600; color: var(--amber); margin-bottom: 3px; }
+.gen-lut-body { display: flex; flex-direction: column; gap: 4px; }
+.gen-lut-dyn { display: flex; flex-direction: column; gap: 4px; padding-left: 8px; border-left: 2px solid var(--border); }
+.gen-lut-warn { font-size: 11px; color: var(--amber); background: var(--amber-soft); padding: 3px 6px; border-radius: 4px; }
+.gen-lut-info { font-size: 11px; color: var(--muted); }
+
+/* 错误列表 */
+.gen-error-panel { padding: 10px 14px; background: var(--red-soft); border-top: 1px solid var(--border); max-height: 160px; overflow-y: auto; }
+.gen-error-list { list-style: none; margin: 0; padding: 0; }
+.gen-error-item { font-size: 12px; color: var(--red); font-family: var(--mono); padding: 2px 0; }
+.gen-error-item.warn { color: var(--amber); }
+
+/* 工具栏按钮 */
+.gen-toolbar { display: flex; gap: 8px; align-items: center; }
+.gen-toolbar .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* 语法高亮 token 颜色 (深色预览区) */
+.gen-preview-pre .tok-kw { color: #60a5fa; font-weight: 600; }
+.gen-preview-pre .tok-str { color: #34d399; }
+.gen-preview-pre .tok-num { color: #fbbf24; }
+.gen-preview-pre .tok-brk { color: #c084fc; font-weight: 600; }
+.gen-preview-pre .tok-cmt { color: #64748b; font-style: italic; }
+.gen-preview-pre .tok-ident { color: #e2e8f0; }
+.gen-preview-pre .tok-trunc { color: #94a3b8; display: block; padding: 8px; text-align: center; }

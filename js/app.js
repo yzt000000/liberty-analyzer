@@ -2185,6 +2185,19 @@
     if (location.protocol === 'file:') {
       toast('提示: file:// 模式下无法加载内置库文件，请用本地 HTTP 服务器启动（见 README）', 'error');
     }
+    // 接收生成器送回的 .lib 文本 (sessionStorage 暂存)
+    pickupPendingLib();
+  }
+
+  function pickupPendingLib() {
+    try {
+      var text = sessionStorage.getItem('__gen_lib__');
+      if (!text) return;
+      var name = sessionStorage.getItem('__gen_lib_name__') || 'generated.lib';
+      sessionStorage.removeItem('__gen_lib__');
+      sessionStorage.removeItem('__gen_lib_name__');
+      addLibrary(name, text, '生成器送回');
+    } catch (e) { /* sessionStorage 不可用时静默 */ }
   }
   document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', init) : init();
 })();

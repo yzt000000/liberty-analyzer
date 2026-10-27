@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liberty 文件生成器 | .lib 正向生成工具</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%230ea5e9'/%3E%3Ctext x='12' y='17' font-size='13' font-family='monospace' font-weight='bold' text-anchor='middle' fill='white'%3EG%3C/text%3E%3C/svg%3E">
+<script>
+/* 资源加载器 (复用 index.html 骨架, 精简 RES: 不含 echarts) */
+(function () {
+  var qs = window.location.search || '';
+  window.CACHE_VERSION = '20261024d';
+  var RES = [
+    { p: 'css/style.css', kind: 'css', label: '基础样式', deps: [] },
+    { p: 'css/liberty-gen.css', kind: 'css', label: '生成器样式', deps: [] },
+    { p: 'js/liberty-parser.js', kind: 'js', label: '解析器', deps: [] },
+    { p: 'js/liberty-worker-src.js', kind: 'js', label: '后台线程', deps: [] },
+    { p: 'js/liberty-gen.js', kind: 'js', label: '生成器', deps: ['js/liberty-parser.js', 'js/liberty-worker-src.js'] }
+  ];
+  var CORE = ['css/style.css', 'css/liberty-gen.css', 'js/liberty-parser.js', 'js/liberty-gen.js'];
+  var TIMEOUT_MS = 12000, RETRIES = 2;
+  var doneCount = 0, injected = {}, sources = {}, coreDone = false, hardFailed = false;
+
+  function assetUrl(p, bust) {
+    var parts = ['v=' + window.CACHE_VERSION];
+    if (bust) parts.push('_r=' + bust);
+    if (qs) parts.push(qs.slice(1));
+    return p + '?' + parts.join('&');
+  }
+
+  var box = document.createElement('div');
+  box.id = 'bootMask';
+  box.style.cssText = 'position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;background:#f3f5f9;font-family:-apple-system,"Segoe UI",sans-serif';
+  box.innerHTML = '<div style="text-align:center;color:#475569">' +
+    '<div style="width:34px;height:34px;margin:0 auto 14px;border:3px solid #cbd5e1;border-top-color:#0ea5e9;border-radius:50%;animation:bootspin .9s linear infinite"></div>' +
+    '<div id="bootText" style="font-size:14px">正在加载组件 0/' + RES.length + '…</div></div>' +
+    '<style>@keyframes bootspin{to{transform:rotate(360deg)}}</style>';
+  function mountBoot() { document.body.appendChild(box); }
+  if (document.body) mountBoot(); else document.addEventListener('DOMContentLoaded', mountBoot);
+  function setBoot(i) { var t = document.getElementById('bootText'); if (t) t.textContent = '正在加载组件 ' + i + '/' + RES.length + '…'; }
+  function hideBoot() { if (box.parentNode) box.parentNode.removeChild(box); }
+  function failPanel(resources, detail) {
+    if (box.parentNode) box.parentNode.removeChild(box);
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#f3f5f9;z-index:99999;font-family:-apple-system,"Segoe UI",sans-serif;text-align:center;padding:24px';
+    d.innerHTML = '<div style="max-width:540px;color:#475569"><h3 style="color:#dc2626;margin:0 0 12px">组件加载失败</h3>' +
+      '<p style="font-size:14px;line-height:1.8">无法获取：<code style="background:#e8edf5;padding:2px 6px;border-radius:4px">' + resources.join('、') + '</code><br><span style="color:#64748b">' + detail + '</span></p>' +
+      '<button onclick="location.reload()" style="margin-top:8px;padding:9px 20px;border:0;border-radius:8px;background:#0ea5e9;color:#fff;font-size:14px;cursor:pointer">重新加载</button></div>';
+    document.body.appendChild(d);
+  }
+
+  function getText(path, bust) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', assetUrl(path, bust), true);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = function () { if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText); else reject(new Error('HTTP ' + xhr.status)); };
+      xhr.onerror = function () { reject(new Error('网络错误')); };
+      xhr.ontimeout = function () { reject(new Error('超时')); };
+      try { xhr.send(); } catch (e) { reject(e); }
+    });
+  }
+  function loadResource(item) {
+    return new Promise(function (resolve) {
+      var attempt = 0;
+      function tryOnce() {
+        getText(item.p, attempt).then(function (src) { resolve({ item: item, src: src, err: null }); })
+          .catch(function (e) { attempt++; if (attempt <= RETRIES) { setBoot(doneCount); tryOnce(); } else resolve({ item: item, src: null, err: String(e.message || e) }); });
+      }
+      tryOnce();
+    }).then(function (r) { doneCount++; setBoot(doneCount); return r; });
+  }
+  RES.map(loadResource).forEach(function (pr) {
+    pr.then(function (r) {
+      if (!r.src) { if (CORE.indexOf(r.item.p) >= 0) { hardFailed = true; failPanel([r.item.p], String(r.err || '未知错误')); } return; }
+      sources[r.item.p] = r.src; pump();
+    });
+  });
+  function pump() {
+    RES.forEach(function (item) {
+      if (injected[item.p] || !sources[item.p]) return;
+      var ok = item.deps.every(function (d) { return injected[d]; });
+      if (!ok) return;
+      if (item.kind === 'css') { var st = document.createElement('style'); st.textContent = sources[item.p]; document.head.appendChild(st); }
+      else { var sc = document.createElement('script'); sc.textContent = sources[item.p]; document.head.appendChild(sc); }
+      injected[item.p] = true;
+      if (!coreDone && CORE.every(function (p) { return injected[p]; })) { coreDone = true; hideBoot(); bootReady(); }
+    });
+  }
+  setTimeout(function () { if (!coreDone && !hardFailed) failPanel(['（核心组件加载超时）'], '等待超过 ' + Math.round(TIMEOUT_MS * (RETRIES + 1) / 1000) + ' 秒仍未完成。'); }, TIMEOUT_MS * (RETRIES + 1) + 3000);
+
+  function bootReady() {
+    try { LibGen.Controller.init(document.getElementById('genForm'), document.getElementById('genPreview'), document.getElementById('genErrors')); }
+    catch (e) { console.error('生成器初始化失败', e); }
+  }
+})();
+</script>
+</head>
+<body>
+<div class="gen-page">
+  <header class="gen-topbar">
+    <a href="index.html">← 返回分析器</a>
+    <h1>Liberty 文件生成器</h1>
+    <div class="spacer"></div>
+    <div class="gen-toolbar">
+      <button id="btnGenRef" class="btn btn-ghost" title="加载参考 .lib 用于采样缩放或导入 cell">加载参考库</button>
+      <input type="file" id="btnGenRefFile" accept=".lib,.txt" style="display:none">
+      <button id="btnGenImportRefCell" class="btn btn-ghost" disabled title="从参考库选取 cell 导入到表单改写">从参考库导入 cell</button>
+      <button id="btnGenExportCfg" class="btn btn-ghost" title="把当前表单配置导出为 JSON 文件">导出配置</button>
+      <button id="btnGenImportCfg" class="btn btn-ghost" title="从 JSON 配置文件恢复表单">导入配置</button>
+      <input type="file" id="btnGenImportCfgFile" accept=".json,.gen.json" style="display:none">
+      <button id="btnGen" class="btn btn-primary">生成 / 预览</button>
+      <button id="btnGenDownload" class="btn btn-ghost" disabled>下载 .lib</button>
+      <button id="btnGenSend" class="btn btn-ghost" disabled>送回解析验证</button>
+    </div>
+  </header>
+  <div class="gen-main">
+    <div class="gen-form-wrap"><div id="genForm"></div></div>
+    <div class="gen-preview-wrap">
+      <div id="genPreview"><div class="gen-preview-empty">点击「生成 / 预览」查看 .lib 文本</div></div>
+    </div>
+  </div>
+  <div id="genErrors" class="gen-error-panel" style="display:none"></div>
+</div>
+</body>
+</html>
